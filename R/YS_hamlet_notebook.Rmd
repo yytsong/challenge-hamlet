@@ -30,7 +30,7 @@ library(fmsb)
 ```
 
 
-**Note**: This `rmarkdown` file has been uploaded to <>. If you have any questions about this report, please reach me at yuri.songyt@gmail.com.
+**Note**: This `rmarkdown` file has been uploaded to <https://github.com/yytsong/challenge-hamlet>. If you have any questions about this report, please email yuri.songyt@gmail.com.
 
 # Prepare Hamlet text
 
