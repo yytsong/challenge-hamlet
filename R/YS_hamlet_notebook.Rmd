@@ -1,0 +1,536 @@
+---
+title: "Text Analysis of Hamlet"
+author: "Yutong Song"
+date: "20/11/2020"
+output: 
+  html_document:
+    fig_width: 10
+    fig_height: 10
+    toc: true
+    toc_depth: 2
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    number_sections: true
+    code_folding: hide
+    
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(tidyverse)
+library(tidytext)
+library(lexicon)
+library(wordcloud)
+library(hrbrthemes)
+library(ggrepel)
+library(kableExtra)
+library(fmsb)
+```
+
+
+**Note**: This `rmarkdown` file has been uploaded to <>. If you have any questions about this report, please reach me at yuri.songyt@gmail.com.
+
+# Prepare Hamlet text
+
+Step 1: Load text file into the session and inspect
+- Use `read_delim` to load the txt file into the session, and remove the character introduction part
+- Define column names and added new labeling column for **ACT** and **SCENE**
+- Fill down for character, act, and scene to complete the label
+- Inspect the head of the tibble
+
+```{r}
+
+setwd("~/Dropbox/challenge-hamlet/data")
+hamlet <- read_delim(file = "hamlet.txt", delim = "\t",col_names = FALSE, skip = 77)  %>% 
+  rename("character" = "X1", "text" = "X2") %>%
+  mutate(
+    act = case_when(
+      str_detect(character, pattern = "ACT ") ~ character,
+      text == "HAMLET" ~ text,
+      TRUE ~ NA_character_),
+    scene = case_when(
+      str_detect(character, pattern = "ACT |SCENE ") ~ character,
+      text == "HAMLET" ~ text,
+      TRUE ~ NA_character_),
+    character = ifelse(text == "HAMLET", "play_title", str_remove(character, pattern = ":"))
+    ) %>% 
+  fill(act, .direction = "down") %>% 
+  fill(character, .direction = "down") %>% 
+  fill(scene, .direction = "down") 
+
+# Inspection
+head(hamlet)
+```
+Step 2: Further filter out unnecessary lines, where lines highlighted entrance and exeunt, or a line only contain "|".
+
+Sometime, a description goes through multiples where open and close square brackets are not in the same line. Occasionally, a line may include a sentence and a description. The target is to remove all act  descriptions (e.g. entrance and exeunt) without removing any sentences.
+
+```{r}
+remove_desc_hamlet <- hamlet %>%
+  mutate(
+    text = case_when(
+      str_detect(text, pattern = "\\[") &
+        str_detect(text, pattern = "\\]", negate = TRUE) ~ str_c(text, "]"),
+      str_detect(text, pattern = "\\]") &
+        str_detect(text, pattern = "\\[", negate = TRUE) ~ str_c("[", text),
+      TRUE ~ text
+    ),
+    # create a new column that remove less meaningful lines and trim the white spaces
+    new_text = str_remove_all(text, pattern = "\\[.*\\]") %>% trimws(., which = "both")
+  ) %>%
+  # remove empty or "not said" lines
+  filter(!(new_text %in% c("", "|")), !is.na(new_text), character != "play_title") %>% 
+  select(-text) %>% 
+  rename("text" = "new_text")
+
+# Inspection
+head(remove_desc_hamlet)
+```
+
+
+```{r}
+remove_desc_hamlet %>% 
+  filter(str_detect(character, pattern = "SCENE ", negate =  TRUE)) %>% 
+  group_by(act, scene) %>% 
+  summarise(num_of_character = n_distinct(character)) %>% 
+  ungroup() %>% 
+  select(-act) %>% 
+  kbl() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = F
+  ) %>% 
+  pack_rows("ACT I", 1, 5) %>%
+  pack_rows("ACT II", 6, 7) %>%
+  pack_rows("ACT III", 8, 11) %>%
+  pack_rows("ACT IV", 12, 18) %>%
+  pack_rows("ACT V", 19, 19) %>%
+  scroll_box(width = "100%", height = "400px") 
+```
+
+
+
+# The number of lines said per character
+
+Step 1: identify the location of uncommon lines said by "All", and spotted only ACT I/III SCENE II have clause with "All".
+
+```{r}
+# inspect "All" involve which scene
+remove_desc_hamlet %>% 
+  filter(character == "All") 
+```
+
+Step 2: Find characters involved in these lines to correct the number of lines per character involved, I did visually find who were involved in the "All" saying.
+
+```{r}
+hamlet %>%
+  filter(act %in% c("ACT I", "ACT III"), scene == "SCENE II") %>%
+  mutate(label = ifelse(character == "All", "Keep", NA_character_)) %>%
+  group_by(act, scene) %>%
+  fill(label, .direction = "up") %>%
+  filter((label == "Keep" &
+            str_detect(text, pattern = "\\[|\\]")) |
+           (character == "All")) %>%
+  select(-label)
+
+```
+
+**Note**: I chose not to write a function to run through the lines to record who were still remained on stage by the time "All" lines arrived, considering visual inspection outcome (only two scene) and one time use of this script. If this task is repeatable or generalizable, then will recommend to write a function to loop through the lines.
+
+Inspect entrance and exeunt for both scenes, 
+
+- in ACT I SCENE II: "Our duty to your honour." by HORATIO, MARCELLUS, and BARNARDO
+- in ACT III SCENE II: "Lights, lights, lights!" by LORD POLONIUS 
+
+
+## Results 1: Show the number of lines said per character throughout the play.
+
+Hamlet read the most number of lines served the main character purposefully well. The following characters are sorted by descending order of number of lines each said throughout the play. 
+
+```{r fig.width=10, fig.height=8}
+line_df <- remove_desc_hamlet %>%
+  group_by(character) %>%
+  summarise(number_of_lines = n()) %>%
+  ungroup() %>%
+  # remove scene label lines
+  filter(!str_detect(character, pattern = "SCENE |play_title|All")) %>%
+  # adjust for the "All" said
+  mutate(
+    number_of_lines = case_when(
+      character %in% c("HORATIO") ~ number_of_lines + 2L,
+      character %in% c("HAMLET","MARCELLUS", "BARNARDO", "LUCIANUS", "OPHELIA") ~ number_of_lines + 1L,
+      TRUE ~ number_of_lines
+    )
+  ) %>%
+  arrange(desc(number_of_lines))
+
+line_df %>%
+  ggplot() +
+  geom_segment(
+    aes(
+      x = reorder(character, number_of_lines),
+      xend = reorder(character, number_of_lines),
+      y = 0,
+      yend = number_of_lines
+    ),
+    color = "#999999",
+    size = 1
+  ) +
+  geom_point(aes(x = reorder(character, number_of_lines), y = number_of_lines),
+             size = 4,
+             color = "#E69F00") +
+  geom_text_repel(
+    aes(
+      x = reorder(character, number_of_lines),
+      y = number_of_lines,
+      label = number_of_lines,
+    ),
+    color = "grey40",
+    size = 4,
+    nudge_y = 30,
+    nudge_x = 0,
+    direction = "y",
+    hjust = 0,
+    min.segment.length = 0,
+    segment.color = 'transparent'
+  ) +
+  scale_y_continuous(labels=function(x) format(x, big.mark = ",", decimal.mark = ".", scientific = FALSE), limits = c(NA,1300)) +
+  coord_flip() +
+  theme_ipsum() +
+  labs(title = "Number of Lines Said by Each Character",
+       x = "Character",
+       y = "Number of Lines")
+
+```
+
+## Results 2: Show the number of lines said per character throughout the play by act and scene.
+
+Further analysis are carried out by grouping of ACT and SCENE. Refer to the line chart, Hamlet does not have lines in every scene, and he had overwhelmingly more lines prior to ACT IV SCENE II (except ACT III SCENE III and few others). Comparing with Hamlet, OPHELIA and KING CLAUDIUS had more lines after that. 
+
+
+```{r fig.width=10, fig.height=10}
+
+a1s2 <-
+  data.frame(
+    character = c("HORATIO", "MARCELLUS", "BARNARDO"),
+    add_line_1 = rep.int(1, 3),
+    act = rep("ACT I", 3),
+    scene = rep("SCENE II", 3)
+  )
+a3s2 <-
+  data.frame(
+    character = c("LORD POLONIUS"),
+    add_line_2 = rep.int(1, 1),
+    act = rep("ACT III", 1),
+    scene = rep("SCENE II", 1)
+  )
+
+
+line_by_scene_df <- remove_desc_hamlet %>%
+  filter(!str_detect(character, pattern = "SCENE |play_title|All")) %>%
+  group_by(act, scene, character) %>%
+  summarise(number_of_lines = n()) %>%
+  ungroup() %>%
+  left_join(a1s2) %>%
+  left_join(a3s2) %>%
+  mutate_at(vars(starts_with("add_line_")), ~ replace_na(., 0)) %>%
+  mutate(number_of_lines = number_of_lines + add_line_1 + add_line_2) %>%
+  arrange(desc(number_of_lines))  %>%
+  mutate(group_ind = group_indices_(.data = ., .dots = "act", "scene")) %>%
+  unite("act_scene",
+        c("act", "scene"),
+        sep = "_",
+        remove = FALSE)
+
+df_end <- line_by_scene_df %>%
+  group_by(character) %>%
+  filter(group_ind == max(group_ind)) %>%
+  ungroup()
+
+
+bpal2 <-
+  rep (
+    c(
+      "tomato3",
+      "brown",
+      "black",
+      "navy",
+      "steelblue",
+      "grey20",
+      "purple",
+      "orchid3",
+      "maroon",
+      "green4",
+      "cyan4"
+    ),
+    3
+  )
+
+
+names(bpal2) <- unique(line_by_scene_df$character)
+color_pallate <- bpal2[1:length(unique(line_by_scene_df$character))]
+  
+  
+line_by_scene_df %>%
+  ggplot(aes(
+    x = act_scene,
+    y = number_of_lines,
+    group = character,
+    color = character
+  )) +
+  geom_point(size = 3) +
+  geom_line(na.rm = TRUE) +
+  geom_text_repel(
+    data = df_end,
+    aes(label = character),
+    color = "grey40",
+    size = 4,
+    nudge_y = 0,
+    nudge_x = 0.5,
+    direction = "y",
+    hjust = 0,
+    min.segment.length = 0,
+    segment.color = 'grey60'
+  ) +
+  scale_x_discrete(expand = c(0.01, 0.10)) +
+  scale_y_continuous(trans = "log2") +
+  scale_color_manual(values = color_pallate) +
+  theme_ipsum() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 90, size = 10)) +
+  labs(title = "Number of Lines by Act, Scene, and Character",
+       subtitle = "When lines continuous without dots, it means this character skip the scene without a line",
+       y = "Number of Lines - Log2",
+       x = "")
+  
+
+```
+
+
+# A word cloud of unusual words
+
+- Based on definition from Wikipedia, **term frequency–inverse document frequency (tf-idf)** has been calculated to identify importance of a word to a document in a collection or corpus.
+- Source: <https://en.wikipedia.org/wiki/Tf%E2%80%93idf>
+- In this scenario, each scene equals to a document in Hamlet collection.
+
+Step 1: Transfer this data frame to a text-document format and remove descriptive rows.
+
+```{r}
+prepare_scene_text_df <-
+  remove_desc_hamlet %>%
+  filter(str_detect(character, pattern = "play_title|SCENE ", negate = TRUE)) %>%
+  # combine ACT and SCENE to be one unique identifier of each document/scene
+  unite("act_scene", act:scene, sep = "_", remove = TRUE) %>%
+  select("doc_id" = act_scene, text)
+
+head(prepare_scene_text_df)
+
+```
+
+Step 2: Apply `tidytext` package (i.e. `unnest_tokens` and `stop_words`) to tokenize text and remove words that are commonly known as high frequency but contributes less to meanings of text. Followed, count occurance of each word in each scene.
+
+```{r}
+tokenized_df <- prepare_scene_text_df %>%
+  unnest_tokens(word, text)  %>%
+  anti_join(stop_words) %>%
+  group_by(doc_id, word) %>%
+  tally() %>% 
+  arrange(desc(n))
+
+head(tokenized_df)
+```
+
+Step 3: apply `bind_tf_idf` to calculate term frequency (tf), inverse document frequency (idf), and term frequency-inverse document frequency (tf_idf) scores. The higher 
+
+```{r}
+# download data from lexicon package to remove spelling mistakes and optical character recognition (OCR)
+data(grady_augmented)
+
+ordered_tfidf <- tokenized_df %>% 
+  filter(word %in% grady_augmented) %>% 
+  bind_tf_idf(word, doc_id, n) %>% 
+  arrange(desc(tf_idf))  %>% 
+  ungroup() %>% 
+  top_n(., n=100, wt = tf_idf)
+
+head(ordered_tfidf)
+```
+## Result: Make a word cloud of unusual words in the script
+
+Use a three color scheme, it is clearly the word **sponge** is the most rare word in Hamlet, followed by **letters**, **gallows** and a list of other words in lavender, and then the words in tomato color. The current word cloud shows the top 100 unusual words, and it can be expanded as request.
+
+```{r fig.width=10, fig.height=6}
+wordcloud(ordered_tfidf$word, ordered_tfidf$tf_idf, #min.freq = 1,
+          max.words = 100,
+            colors = c("tomato3", "lavenderblush3","steelblue"))
+
+```
+**Note**: Also, `tm` and `qdap` packages are useful to convert this dataframe into a term document matrix. Choose term document matrix (TDM) because have more terms than scenes and it is easier to organize more rows than columns.
+
+
+# Compute the sentiment score for each scene.
+
+I choose to apply two frameworks: Afinn and NRC, and compare their results.
+
+
+## Result 1: Sentiment Analysis by Afinn
+
+- Afinn is a score-based dataset, which first column contains words and second column contains sentiment values between [-5, 5].
+- Source <https://github.com/fnielsen/afinn>
+
+
+```{r}
+afinnsentiments = get_sentiments('afinn')
+head(afinnsentiments, 10)
+```
+The result shows that Hamlet is a tragedy by overwhelmingly negative sentiment scores throughout the place. Reached its lowest score -1.18 during ACT II SCENE I, while the highest was met during ACT IV_SCENE III 0.57. This play is overwhelmingly negative in sentiment.
+
+```{r}
+afinn_df <-
+  tokenized_df  %>%
+  inner_join(afinnsentiments) %>%
+  group_by(doc_id) %>%
+  add_tally() %>%
+  tally(mean(value)) %>%
+  arrange(doc_id)
+
+
+afinn_df %>% 
+  ggplot(aes(x = fct_rev(doc_id), y = n)) +
+  geom_col()+
+  theme_ipsum() +
+  coord_flip() +
+  labs(title = "AFINN Sentiment Score by Scene",
+       x = "",
+       y = "Score") +
+  scale_y_continuous(expand = c(-0.5, 1))
+
+```
+
+## Result 2: Sentiment Analysis by NRC
+
+- NRC is a crowd sourced dataset. It contains eight basic emotions (anger, anticipation, disgust, fear, joy, sadness, surprise, and trust) and two sentiments (positive and negative).
+- A big difference from Afinn is that a word can have multiple entries with different emotions attached to them.
+- Source: <https://saifmohammad.com/WebPages/NRC-Emotion-Lexicon.htm>
+
+```{r}
+nrcsentiments = get_sentiments('nrc')
+head(nrcsentiments)
+```
+
+```{r}
+nrc_df <- tokenized_df %>%
+  inner_join(nrcsentiments) %>%
+  group_by(doc_id, sentiment) %>%
+  summarise(n = sum(n)) %>%
+  ungroup() %>%
+  group_by(doc_id) %>%
+  mutate(value = n / sum(n)) %>%
+  ungroup() %>%
+  mutate(value = scales::percent(value, accuracy = 0.01)) %>%
+  select(-n) %>%
+  pivot_wider(names_from = "sentiment", values_from = "value") %>%
+  select(doc_id, positive, negative, everything(.)) %>%
+  separate(col = doc_id,
+           into = c("act", "scene"),
+           sep = "_") %>%
+  select(-act)
+
+kbl(nrc_df) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = F
+  ) %>%
+  add_header_above(c(
+    " " = 1,
+    "Sentiment" = 2,
+    "Emotion" = 8
+  )) %>%
+  pack_rows("ACT I", 1, 5) %>%
+  pack_rows("ACT II", 6, 7) %>%
+  pack_rows("ACT III", 8, 11) %>%
+  pack_rows("ACT IV", 12, 18) %>%
+  pack_rows("ACT V", 19, 19) %>%
+  scroll_box(width = "100%", height = "600px") 
+
+```
+
+**Note**: Scroll up for the end of the table.
+
+- The radar chart below showcased an example of using median score for each emotion through 19 scenes.
+- Sentiment: "positive" and "negative" have been removed from this visualization.
+- "Trust" came on top followed by "fear".
+
+```{r fig.width=6, fig.height= 6}
+radar_df <- tokenized_df %>%
+  inner_join(nrcsentiments) %>%
+  group_by(doc_id, sentiment) %>%
+  summarise(n = sum(n)) %>%
+  ungroup() %>%
+  group_by(doc_id) %>%
+  mutate(value = n / sum(n)) %>%
+  ungroup() %>%
+  select(-n) %>%
+  pivot_wider(names_from = "sentiment", values_from = "value") %>%
+  select(-c("positive", "negative")) %>%
+  separate(col = doc_id,
+           into = c("act", "scene"),
+           sep = "_") %>%
+  summarise_at(vars(anger:trust), ~ median(., na.rm = TRUE)) %>% 
+  rbind(rep(0.15,10), rep(0,10), .)
+
+radarchart(
+  radar_df,
+  axistype = 1 ,
+  pcol = rgb(0.2, 0.5, 0.5, 0.9) ,
+  pfcol = rgb(0.2, 0.5, 0.5, 0.5) ,
+  plwd = 4 ,
+  cglcol = "grey",
+  cglty = 2,
+  axislabcol = "grey",
+  caxislabels = seq(0, 20, 5),
+  cglwd = 0.8,
+  vlcex = 0.8
+)
+
+```
+
+
+
+
+# Summary
+
+To conclude, this report addressed three key questions:
+
+- Show the number of lines said per character throughout the play.
+
+Highlight: I noticed the unusual line titled to "All" and adjust for the characters involved. Results have been presented using a lolliplot, and then in a line chart to show number of lines said by each character towards the timeline of the play.
+
+- Make a word cloud of unusual words in the script
+
+Highlight: I removed common stopwords, separated the play by scene (this can also be done by character), and apply tf-idf to calculate rareness of each word to the entire play. Outcome has been presented in a word cloud by request.
+
+- Compute the sentiment score for each scene.
+
+Highlight: I compared results by applying AFINN and NRC frameworks over the text tokens. Advantages of using AFINN includes but not limited to faster computation over larger datasets, and simple interpretable results. On the other hand, NRC offers additional eight dimensions of human-touch emotions, the result is more comprehensive and humanized. Results have been compared among a column chart, a table, and a radarchart.
+
+# Future Work
+
+Additional character analysis can be carried out following the idea proposed in Nalisnick and Baird (2013), refer to reference 2. More sentiment frameworks can be tested, for instance, "bing" (positive / negative).
+
+If analysis is carried out by less technical users, interactive visualization should be developed, and `Shiny` is a good complementary tool with this reports.
+
+All suggestions are welcome.
+
+
+# Additional Reference
+
+1. Basic Radar Chart. URL: <https://www.r-graph-gallery.com/142-basic-radar-chart.html>
+
+2. Nalisnick, E. T., & Baird, H. S. (2013, August). Character-to-character sentiment analysis in Shakespeare’s plays. In Proceedings of the 51st Annual Meeting of the Association for Computational Linguistics (Volume 2: Short Papers) (pp. 479-483). URL: <https://www.aclweb.org/anthology/P13-2085.pdf> 
+
+3. Yann, R. (2020) A Short Guide to Historical Newspaper Data, Using R. URL: <https://bookdown.org/yann_ryan/r-for-newspaper-data/calculating-tf-idf-scores-with-tidytext.html>
+
+4. Zhu, H. (2020). Create Awesome HTML Table with knitr::kable and kableExtra. URL: <https://cran.r-project.org/web/packages/kableExtra/vignettes/awesome_table_in_html.html>
