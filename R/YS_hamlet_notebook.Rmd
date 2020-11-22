@@ -27,6 +27,7 @@ library(hrbrthemes)
 library(ggrepel)
 library(kableExtra)
 library(fmsb)
+library(plotly)
 ```
 
 
@@ -210,7 +211,7 @@ line_df %>%
 Further analysis are carried out by grouping of ACT and SCENE. Refer to the line chart, Hamlet does not have lines in every scene, and he had overwhelmingly more lines prior to ACT IV SCENE II (except ACT III SCENE III and few others). Comparing with Hamlet, OPHELIA and KING CLAUDIUS had more lines after that. 
 
 
-```{r fig.width=10, fig.height=10}
+```{r fig.width=10, fig.height=5}
 
 a1s2 <-
   data.frame(
@@ -273,37 +274,45 @@ names(bpal2) <- unique(line_by_scene_df$character)
 color_pallate <- bpal2[1:length(unique(line_by_scene_df$character))]
   
   
-line_by_scene_df %>%
+plt_line_by_scene <- line_by_scene_df %>%
+  mutate(label = str_c("ACT: ", act, "\n",
+                       "SCENE: ", scene, "\n",
+                       "Character: ", character, "\n",
+                       "No. of Lines: ", number_of_lines)) %>% 
   ggplot(aes(
     x = act_scene,
     y = number_of_lines,
     group = character,
-    color = character
+    color = character,
+    text = label
   )) +
   geom_point(size = 3) +
   geom_line(na.rm = TRUE) +
-  geom_text_repel(
-    data = df_end,
-    aes(label = character),
-    color = "grey40",
-    size = 4,
-    nudge_y = 0,
-    nudge_x = 0.5,
-    direction = "y",
-    hjust = 0,
-    min.segment.length = 0,
-    segment.color = 'grey60'
-  ) +
+  # geom_text_repel(
+  #   data = df_end,
+  #   aes(label = character),
+  #   color = "grey40",
+  #   size = 4,
+  #   nudge_y = 0,
+  #   nudge_x = 0.5,
+  #   direction = "y",
+  #   hjust = 0,
+  #   min.segment.length = 0,
+  #   segment.color = 'grey60'
+  # ) +
   scale_x_discrete(expand = c(0.01, 0.10)) +
   scale_y_continuous(trans = "log2") +
   scale_color_manual(values = color_pallate) +
   theme_ipsum() +
   theme(legend.position = "none",
-        axis.text.x = element_text(angle = 90, size = 10)) +
+        axis.text.x = element_text(angle = 45, size = 10)) +
   labs(title = "Number of Lines by Act, Scene, and Character",
        subtitle = "When lines continuous without dots, it means this character skip the scene without a line",
        y = "Number of Lines - Log2",
        x = "")
+
+
+ggplotly(plt_line_by_scene, tooltip = "text")
   
 
 ```
@@ -398,11 +407,12 @@ afinn_df <-
 
 
 afinn_df %>% 
-  ggplot(aes(x = fct_rev(doc_id), y = n)) +
+  ggplot(aes(x = fct_reorder(doc_id,n), y = n)) +
   geom_col()+
   theme_ipsum() +
   coord_flip() +
   labs(title = "AFINN Sentiment Score by Scene",
+       subtitle = "Descending ordered by sentiment scores",
        x = "",
        y = "Score") +
   scale_y_continuous(expand = c(-0.5, 1))
